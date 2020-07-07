@@ -79,33 +79,41 @@ allocate({[], Allocated}, _Pid) ->
   {{[], Allocated}, {error, no_frequency}};
   
 allocate({[Freq|Free], Allocated}, Pid) ->
-	%% attempt to allocate the head of the provided free freqs to the Pid;
-	%% compare the 2nd element of all tuples in the tuple list against Pid to 
-	%% determine allocation.
-  case lists:keymember(Pid, 2, Allocated) of
-    true ->
-		%% the Pid was determined to be allocated to the freq at the head of the
-		%% provided 'free' freqs, return an error
-      {{[Freq|Free], Allocated}, {error, already_allocated}};
-    _ ->
-		%% catch all case : allocate the head of the 'free' freqs to the Pid, creating
-		%% expected the tuple & sticking that at the head of the Allocated list, 
-		%% which is returned along with the remaining free freqs & the tuple containing
-		%% the ok atom & the just allocated freq
-      {{Free, [{Freq, Pid}|Allocated]}, {ok, Freq}}
-  end.
-
-deallocate({Free, Allocated}, Freq, Pid) ->
-	%% similar to the allocate function, attempt to match the 'Freq' in the tuple list 'Allocated'
+	%% attempt to match the 'Freq' in the tuple list 'Allocated'
 	%% where the tuples in that list are in the form {Freq, Pid}
 	%% It may be found, or not (not allocated to any Pid)
 	FreqAllocFound = lists:keyfind(Freq, 1, Allocated),
 	case FreqAllocFound of
 		false ->
+			%% the Freq is not allocated to any Pid; before we allocate to the 
+			%% provided Pid, we need to check if the Pid is allocated any other freqs
+			PidAllocFound = lists:keyfind(Pid, 2, Allocated),
+			case PidAllocFound of
+				false -> 
+					%% no other allocation, we can allocate this freq to it;
+					%% allocate the head of the 'free' freqs to the Pid, creating
+					%% expected the tuple & sticking that at the head of the Allocated list, 
+					%% which is returned along with the remaining free freqs & the tuple containing
+					%% the ok atom & the just allocated freq								
+					{{Free, [{Freq, Pid}|Allocated]}, {ok, Freq}};
+				_->
+					%% already allocated some freq; echo back the provided params & provide an error
+					{{[Freq|Free], Allocated}, {error, over_subscribed}}
+			end;
+			
+		_->
+			%% the freq is already allocated to some Pid, return with a different err
+			{{[Freq|Free], Allocated}, {error, already_allocated}}
+  end.
+
+deallocate({Free, Allocated}, Freq, Pid) ->
+	%% similar to the allocate function
+	FreqAllocFound = lists:keyfind(Freq, 1, Allocated),
+	case FreqAllocFound of
+		false ->
 			%% the frequency 'Freq' is not allocated to any Pid
 			{{Free, Allocated}, {error, not_allocated}};		
-		_ ->
-			io:format("Alloc found for freq : ~w : ~w~n",[Freq, FreqAllocFound]),
+		_->
 			%% Now we need to determine if the requesting Pid is allocated this frequency 
 			%% & therefore has permission to deallocate it.
 			case match_pid(FreqAllocFound, Pid) of 
@@ -168,7 +176,7 @@ test_allocate_internal() ->
 	
 	%% or if we try to allocate another frequency we should also get an error (only 1 allocation allowed)
 	%% Now if we try to reallocate the same freq again it should fail.
-	{{[5,6], NewAllocated}, {error, ok}} = allocate({[5,6], NewAllocated}, Self),
+	{{[5,6], NewAllocated}, {error, over_subscribed}} = allocate({[5,6], NewAllocated}, Self),
 	
 
 pass.
@@ -184,7 +192,7 @@ test_deallocate_internal() ->
 
 pass.
 
-%% based on the internal tests for allocate, this should be self-explanatory
+%% test the allocation process through the user exposed server
 test_server_allocate() ->
 	Self = self(),
 	Freq_server = spawn(?MODULE, init, []),
@@ -203,7 +211,7 @@ test_server_allocate() ->
 	end,	
 pass.
 
-
+%% test the deallocation process through the user exposed server
 test_server_deallocate() ->
 	Self = self(),
 	Freq_server = spawn(?MODULE, init, []),
